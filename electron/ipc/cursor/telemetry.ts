@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import {
 	CURSOR_SAMPLE_INTERVAL_MS,
 	CURSOR_TELEMETRY_VERSION,
+	LINUX_CURSOR_CACHE_TTL_MS,
 	MAX_CURSOR_SAMPLES,
 } from "../constants";
 import {
@@ -167,7 +168,8 @@ export function getCursorCaptureElapsedMs(nowMs = Date.now()) {
 export function getNormalizedCursorPoint() {
 	const fallbackCursor = getScreen().getCursorScreenPoint();
 	const linuxCursorCache = process.platform === "linux" ? linuxCursorScreenPoint : null;
-	const isLinuxCacheFresh = !!linuxCursorCache && Date.now() - linuxCursorCache.updatedAt <= 1000;
+	const isLinuxCacheFresh =
+		!!linuxCursorCache && Date.now() - linuxCursorCache.updatedAt <= LINUX_CURSOR_CACHE_TTL_MS;
 
 	const primarySf =
 		process.platform !== "darwin" ? getScreen().getPrimaryDisplay().scaleFactor || 1 : 1;
