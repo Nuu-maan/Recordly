@@ -161,7 +161,9 @@ describe("buildBridgeQml", () => {
 	it("heartbeats while the pointer is still, so a dead server is noticed", () => {
 		// Without this the script only discovers a dead server when the user next
 		// moves the mouse, which is exactly when it should already be silent.
-		expect(qml).toContain("Date.now() - lastPostMs < 2000");
+		// Must stay under LINUX_CURSOR_CACHE_TTL_MS or the cached position ages
+		// out between heartbeats and the recording gets holes of (0, 0).
+		expect(qml).toContain("Date.now() - lastPostMs < 500");
 	});
 
 	it("coerces interpolated numbers so a future non-numeric constant cannot escape", () => {
