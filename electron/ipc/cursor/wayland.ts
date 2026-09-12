@@ -4,6 +4,7 @@ import path from "node:path";
 import { CURSOR_SAMPLE_INTERVAL_MS } from "../constants";
 import { setLinuxCursorScreenPoint } from "../state";
 import { getScreen } from "../utils";
+import { startKWinCursorPolling } from "./kwin";
 
 const EV_KEY = 1;
 const BTN_LEFT = 0x110;
@@ -160,8 +161,8 @@ function startEvdevButtonCapture(handlers: {
 	};
 }
 
-// ponytail: Hyprland-only pointer position via its IPC socket; other Wayland
-// compositors keep falling back to Electron's stale cursor point.
+// Pointer position comes from whichever compositor bridge answers first;
+// compositors without one keep falling back to Electron's stale cursor point.
 export function startWaylandInteractionCapture(handlers: {
 	onMouseDown: (button: 1 | 2 | 3) => void;
 	onMouseUp: () => void;
@@ -170,7 +171,7 @@ export function startWaylandInteractionCapture(handlers: {
 		return null;
 	}
 
-	const stopPolling = startHyprlandCursorPolling();
+	const stopPolling = startHyprlandCursorPolling() ?? startKWinCursorPolling();
 	const stopButtons = startEvdevButtonCapture(handlers);
 	return () => {
 		stopPolling?.();
