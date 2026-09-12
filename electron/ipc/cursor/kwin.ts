@@ -1,16 +1,25 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { CURSOR_SAMPLE_INTERVAL_MS } from "../constants";
-import { setLinuxCursorScreenPoint } from "../state";
-import { getScreen } from "../utils";
 
-const KWIN_SCRIPT_NAME = "recordly-cursor-bridge";
+const SCRIPT_NAME_PREFIX = "recordly-cursor-bridge";
+const TEMP_DIR_PREFIX = "recordly-kwin-";
 const MAX_PAYLOAD_BYTES = 128;
 const DBUS_TIMEOUT_MS = 4000;
+const REQUEST_TIMEOUT_MS = 5000;
+// Posted even when the pointer has not moved, so the script notices a dead
+// server while the user is idle instead of only when they move the mouse.
+const HEARTBEAT_MS = 2000;
+// The compositor is legitimately silent while the pointer is still, so this
+// only downgrades an optimistic "bridge active" log into an honest warning.
+const FIRST_SAMPLE_GRACE_MS = 10_000;
+const STALE_TEMP_DIR_AGE_MS = 24 * 60 * 60 * 1000;
+// A coordinate this far outside any real layout is a bug or a forgery.
+const MAX_REASONABLE_COORDINATE = 100_000;
 
 export function isKdeWaylandSession(env: NodeJS.ProcessEnv = process.env): boolean {
 	const wayland = env.XDG_SESSION_TYPE === "wayland" || Boolean(env.WAYLAND_DISPLAY);
@@ -29,7 +38,7 @@ const SCRIPTING: DBusTarget = {
 // D-Bus client. Rather than add a dependency for three calls, shell out to
 // whichever standard client the system already has. gdbus comes with glib,
 // which Electron already links against; busctl comes with systemd.
-const DBUS_CLIENTS: {
+export const DBUS_CLIENTS: {
 	bin: string;
 	buildArgs: (target: DBusTarget, method: string, args: string[]) => string[];
 }[] = [
@@ -56,30 +65,72 @@ const DBUS_CLIENTS: {
 			target.objectPath,
 			target.interfaceName,
 			method,
+			// Every argument these three methods take is a string, and busctl reads
+			// an empty signature as a zero-argument call.
 			"s".repeat(args.length),
 			...args,
 		],
 	},
 ];
 
-function callKWin(target: DBusTarget, method: string, args: string[]): string | null {
-	for (const client of DBUS_CLIENTS) {
-		const result = spawnSync(client.bin, client.buildArgs(target, method, args), {
-			encoding: "utf-8",
-			timeout: DBUS_TIMEOUT_MS,
-		});
-		if (result.error || result.status !== 0) {
-			continue;
-		}
-		return (result.stdout ?? "").trim();
-	}
-	return null;
+export type KWinCallResult = { stdout: string } | { failure: string };
+
+export function isKWinCallFailure(result: KWinCallResult): result is { failure: string } {
+	return "failure" in result;
 }
 
-// Reads the pointer from KWin and posts it back over loopback. The timer
-// coalesces the signal down to the telemetry sample rate, and only positions
-// that actually changed are sent, so an idle pointer costs nothing.
-function buildBridgeQml(port: number, token: string): string {
+function runDBusClient(bin: string, args: string[]): Promise<KWinCallResult> {
+	return new Promise((resolve) => {
+		execFile(bin, args, { timeout: DBUS_TIMEOUT_MS }, (error, stdout, stderr) => {
+			if (error) {
+				const detail = (stderr || error.message || "").trim().split("\n")[0];
+				resolve({ failure: `${bin}: ${detail || "failed"}` });
+				return;
+			}
+			resolve({ stdout: stdout.trim() });
+		});
+	});
+}
+
+// Asynchronous on purpose: this runs on the Electron main thread while the user
+// is pressing Record, and a wedged session bus must never freeze the UI.
+async function callKWin(
+	target: DBusTarget,
+	method: string,
+	args: string[],
+): Promise<KWinCallResult> {
+	const failures: string[] = [];
+	for (const client of DBUS_CLIENTS) {
+		const result = await runDBusClient(client.bin, client.buildArgs(target, method, args));
+		if (!isKWinCallFailure(result)) {
+			return result;
+		}
+		failures.push(result.failure);
+	}
+	return { failure: failures.join("; ") };
+}
+
+/**
+ * Reads the pointer from KWin and posts it back over loopback.
+ *
+ * The timer coalesces the signal down to the telemetry sample rate and only
+ * posts positions that actually changed, so an idle pointer costs nothing.
+ *
+ * The self-disarming matters more than it looks. A KWin script cannot unload
+ * itself, so an app that dies without unloading this one would otherwise leave
+ * it broadcasting the pointer to an ephemeral port that any later local process
+ * can bind and read. Two things bound that. The server echoes an acknowledgement
+ * secret that only it knows, and a single wrong or missing echo disarms the
+ * script, so an impostor on that port learns at most one position. A heartbeat
+ * keeps posting while the pointer is still, so a dead server is noticed within
+ * seconds rather than whenever the user next moves the mouse.
+ */
+export function buildBridgeQml(
+	port: number,
+	token: string,
+	ack: string,
+	intervalMs: number,
+): string {
 	return `import QtQuick
 import org.kde.kwin
 
@@ -88,19 +139,54 @@ Item {
     property int lastY: -1
     property int pendingX: -1
     property int pendingY: -1
+    property int failures: 0
+    property double lastPostMs: 0
+
+    function disarm() {
+        sampler.running = false;
+    }
 
     function post(x, y) {
         var request = new XMLHttpRequest();
-        request.open("POST", "http://127.0.0.1:${port}/${token}");
+        request.onreadystatechange = function () {
+            if (request.readyState !== XMLHttpRequest.DONE) {
+                return;
+            }
+            if (request.status !== 204) {
+                failures = failures + 1;
+                if (failures >= 3) {
+                    disarm();
+                }
+                return;
+            }
+            if (request.getResponseHeader("X-Recordly-Bridge") !== "${ack}") {
+                // Somebody else is answering on this port. Stop immediately
+                // rather than keep handing them the pointer position.
+                disarm();
+                return;
+            }
+            failures = 0;
+        };
+        request.open("POST", "http://127.0.0.1:${Number(port)}/${token}");
         request.send('{"x":' + x + ',"y":' + y + '}');
+        lastPostMs = Date.now();
     }
 
     Timer {
-        interval: ${CURSOR_SAMPLE_INTERVAL_MS}
+        id: sampler
+        interval: ${Number(intervalMs)}
         repeat: true
         running: true
         onTriggered: {
+            if (pendingX < 0 && pendingY < 0) {
+                // No real position yet; never report the sentinel.
+                return;
+            }
             if (pendingX === lastX && pendingY === lastY) {
+                if (Date.now() - lastPostMs < ${Number(HEARTBEAT_MS)}) {
+                    return;
+                }
+                post(lastX, lastY);
                 return;
             }
             lastX = pendingX;
@@ -110,6 +196,10 @@ Item {
     }
 
     Component.onCompleted: {
+        // Seed from the current position so the first sample is real rather than
+        // whatever the pointer happens to do first.
+        pendingX = Workspace.cursorPos.x;
+        pendingY = Workspace.cursorPos.y;
         Workspace.cursorPosChanged.connect(function () {
             pendingX = Workspace.cursorPos.x;
             pendingY = Workspace.cursorPos.y;
@@ -133,85 +223,201 @@ export function parseKWinScriptId(raw: string | null): string | null {
 	return match[0];
 }
 
+export function isPlausibleCursorPoint(value: unknown): value is { x: number; y: number } {
+	const point = value as { x?: unknown; y?: unknown } | null;
+	if (!point || typeof point.x !== "number" || typeof point.y !== "number") {
+		return false;
+	}
+	return (
+		Number.isFinite(point.x) &&
+		Number.isFinite(point.y) &&
+		Math.abs(point.x) <= MAX_REASONABLE_COORDINATE &&
+		Math.abs(point.y) <= MAX_REASONABLE_COORDINATE
+	);
+}
+
+// Crashed runs leave their generated QML behind; sweep anything old enough that
+// it cannot belong to a live bridge.
+function removeStaleTempDirs(): void {
+	const root = tmpdir();
+	let entries: string[];
+	try {
+		entries = readdirSync(root);
+	} catch {
+		return;
+	}
+	const cutoff = Date.now() - STALE_TEMP_DIR_AGE_MS;
+	for (const entry of entries) {
+		if (!entry.startsWith(TEMP_DIR_PREFIX)) {
+			continue;
+		}
+		const candidate = path.join(root, entry);
+		try {
+			if (statSync(candidate).mtimeMs < cutoff) {
+				rmSync(candidate, { recursive: true, force: true });
+			}
+		} catch {
+			// Another instance may have removed it already.
+		}
+	}
+}
+
 /**
  * Streams the pointer position on KDE Wayland, where uiohook's XRecord hook
- * only ever sees XWayland clients. Returns a stop function, or null when the
- * session is not KDE Wayland. Startup happens in the background so this keeps
- * the synchronous signature startHyprlandCursorPolling uses.
+ * only ever sees XWayland clients.
+ *
+ * Returns a stop function, or null when the session is not KDE Wayland.
+ * Startup continues in the background so the caller keeps the synchronous
+ * signature the other providers use, and the returned stop function is safe to
+ * call at any point during that startup.
  */
-export function startKWinCursorPolling(): (() => void) | null {
+export function startKWinCursorBridge(
+	onPoint: (point: { x: number; y: number }) => void,
+): (() => void) | null {
 	if (process.platform !== "linux" || !isKdeWaylandSession()) {
 		return null;
 	}
 
 	const token = randomBytes(16).toString("hex");
-	const scriptDir = mkdtempSync(path.join(tmpdir(), "recordly-kwin-"));
+	// Echoed on every reply so the script can tell our server from whoever binds
+	// this ephemeral port after the app is gone.
+	const ack = randomBytes(16).toString("hex");
+	// Unique per process so two Recordly instances in one session cannot unload
+	// each other's bridge.
+	const scriptName = `${SCRIPT_NAME_PREFIX}-${process.pid}-${token.slice(0, 8)}`;
+	removeStaleTempDirs();
+	const scriptDir = mkdtempSync(path.join(tmpdir(), TEMP_DIR_PREFIX));
 	const qmlPath = path.join(scriptDir, "cursor-bridge.qml");
+
 	let stopped = false;
-	let scriptLoaded = false;
+	let scriptHandedToKWin = false;
+	let sampleSeen = false;
+	let graceTimer: NodeJS.Timeout | null = null;
 
 	const server = createServer((request, response) => {
 		if (request.method !== "POST" || request.url !== `/${token}`) {
+			// Drain before replying so the socket is not left half-consumed.
+			request.resume();
 			response.writeHead(404).end();
 			return;
 		}
-		let body = "";
-		request.on("data", (chunk) => {
-			body += chunk;
-			if (body.length > MAX_PAYLOAD_BYTES) {
+		const chunks: Buffer[] = [];
+		let size = 0;
+		request.on("data", (chunk: Buffer) => {
+			size += chunk.length;
+			if (size > MAX_PAYLOAD_BYTES) {
 				request.destroy();
+				return;
 			}
+			chunks.push(chunk);
 		});
 		request.on("end", () => {
-			response.writeHead(204).end();
+			response.writeHead(204, { "X-Recordly-Bridge": ack }).end();
 			try {
-				const parsed = JSON.parse(body) as { x?: unknown; y?: unknown };
-				if (typeof parsed.x === "number" && typeof parsed.y === "number") {
-					// KWin reports logical layout coordinates; the telemetry cache
-					// expects physical pixels like the X11 hook provides.
-					const scale = getScreen().getPrimaryDisplay().scaleFactor || 1;
-					setLinuxCursorScreenPoint({
-						x: parsed.x * scale,
-						y: parsed.y * scale,
-						updatedAt: Date.now(),
-					});
+				const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+				if (isPlausibleCursorPoint(parsed)) {
+					sampleSeen = true;
+					onPoint({ x: parsed.x, y: parsed.y });
 				}
 			} catch {
 				// The bridge only ever sends two integers; ignore anything else.
 			}
 		});
 	});
+	server.requestTimeout = REQUEST_TIMEOUT_MS;
+
+	const releaseLocalResources = () => {
+		if (graceTimer) {
+			clearTimeout(graceTimer);
+			graceTimer = null;
+		}
+		server.close();
+		// close() alone leaves established keep-alive sockets open, and Qt's
+		// XMLHttpRequest holds one.
+		server.closeAllConnections();
+		rmSync(scriptDir, { recursive: true, force: true });
+	};
 
 	server.on("error", (error) => {
 		console.warn("[CursorTelemetry] KWin cursor bridge socket failed:", error);
+		if (!stopped) {
+			stopped = true;
+			releaseLocalResources();
+		}
 	});
 
 	server.listen(0, "127.0.0.1", () => {
-		if (stopped) {
-			server.close();
-			return;
-		}
 		const address = server.address();
-		if (typeof address === "string" || address === null) {
+		if (stopped || typeof address === "string" || address === null) {
 			return;
 		}
-		writeFileSync(qmlPath, buildBridgeQml(address.port, token), "utf-8");
-		// A leftover script from a crashed run would keep posting to a dead port.
-		callKWin(SCRIPTING, "unloadScript", [KWIN_SCRIPT_NAME]);
-		const scriptId = parseKWinScriptId(
-			callKWin(SCRIPTING, "loadDeclarativeScript", [qmlPath, KWIN_SCRIPT_NAME]),
+		writeFileSync(
+			qmlPath,
+			buildBridgeQml(address.port, token, ack, CURSOR_SAMPLE_INTERVAL_MS),
+			"utf-8",
 		);
-		if (scriptId === null) {
-			console.warn("[CursorTelemetry] Could not load the KWin cursor bridge script.");
-			return;
-		}
-		scriptLoaded = true;
-		callKWin(
-			{ objectPath: `/Scripting/Script${scriptId}`, interfaceName: "org.kde.kwin.Script" },
-			"run",
-			[],
-		);
-		console.log("[CursorTelemetry] KWin cursor bridge active.");
+
+		void (async () => {
+			const loaded = await callKWin(SCRIPTING, "loadDeclarativeScript", [
+				qmlPath,
+				scriptName,
+			]);
+			if (stopped) {
+				return;
+			}
+			if (isKWinCallFailure(loaded)) {
+				console.warn(
+					"[CursorTelemetry] Could not reach KWin to load the cursor bridge:",
+					loaded.failure,
+				);
+				return;
+			}
+			// KWin owns the script from here on, whatever the reply looked like, so
+			// the stop path must unload it even when the id did not parse.
+			scriptHandedToKWin = true;
+
+			const scriptId = parseKWinScriptId(loaded.stdout);
+			if (scriptId === null) {
+				console.warn(
+					"[CursorTelemetry] KWin refused the cursor bridge script:",
+					loaded.stdout || "(no reply)",
+				);
+				return;
+			}
+
+			const started = await callKWin(
+				{
+					objectPath: `/Scripting/Script${scriptId}`,
+					interfaceName: "org.kde.kwin.Script",
+				},
+				"run",
+				[],
+			);
+			if (stopped) {
+				return;
+			}
+			if (isKWinCallFailure(started)) {
+				console.warn(
+					"[CursorTelemetry] KWin cursor bridge failed to start:",
+					started.failure,
+				);
+				return;
+			}
+
+			// loadDeclarativeScript reports success even when the QML fails to
+			// instantiate, which is what happens on Plasma 5 where the workspace is
+			// not the Workspace singleton this script expects. Silence is the only
+			// signal available, so say so rather than claiming success.
+			graceTimer = setTimeout(() => {
+				if (!sampleSeen) {
+					console.warn(
+						"[CursorTelemetry] KWin cursor bridge produced no samples; cursor effects will have no data. This provider needs Plasma 6.",
+					);
+				}
+			}, FIRST_SAMPLE_GRACE_MS);
+			graceTimer.unref();
+			console.log("[CursorTelemetry] KWin cursor bridge loaded.");
+		})();
 	});
 
 	return () => {
@@ -219,12 +425,16 @@ export function startKWinCursorPolling(): (() => void) | null {
 			return;
 		}
 		stopped = true;
-		if (scriptLoaded) {
-			// A left-behind script would keep firing at a closed port, so unload it
-			// even though this costs one short synchronous call on the session bus.
-			callKWin(SCRIPTING, "unloadScript", [KWIN_SCRIPT_NAME]);
+		if (scriptHandedToKWin) {
+			void callKWin(SCRIPTING, "unloadScript", [scriptName]).then((result) => {
+				if (isKWinCallFailure(result)) {
+					console.warn(
+						"[CursorTelemetry] Could not unload the KWin cursor bridge:",
+						result.failure,
+					);
+				}
+			});
 		}
-		server.close();
-		rmSync(scriptDir, { recursive: true, force: true });
+		releaseLocalResources();
 	};
 }
