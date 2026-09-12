@@ -4,7 +4,7 @@ import path from "node:path";
 import { CURSOR_SAMPLE_INTERVAL_MS } from "../constants";
 import { setLinuxCursorScreenPoint } from "../state";
 import { getScreen } from "../utils";
-import { startKWinCursorPolling } from "./kwin";
+import { startKWinCursorBridge } from "./kwin";
 
 const EV_KEY = 1;
 const BTN_LEFT = 0x110;
@@ -161,6 +161,17 @@ function startEvdevButtonCapture(handlers: {
 	};
 }
 
+function setKWinCursorPoint(point: { x: number; y: number }): void {
+	// KWin reports logical layout coordinates, same as Hyprland above; the
+	// telemetry cache expects physical pixels like the X11 hook provides.
+	const scale = getScreen().getPrimaryDisplay().scaleFactor || 1;
+	setLinuxCursorScreenPoint({
+		x: point.x * scale,
+		y: point.y * scale,
+		updatedAt: Date.now(),
+	});
+}
+
 // Pointer position comes from whichever compositor bridge answers first;
 // compositors without one keep falling back to Electron's stale cursor point.
 export function startWaylandInteractionCapture(handlers: {
@@ -171,10 +182,10 @@ export function startWaylandInteractionCapture(handlers: {
 		return null;
 	}
 
-	const stopPolling = startHyprlandCursorPolling() ?? startKWinCursorPolling();
+	const stopPointer = startHyprlandCursorPolling() ?? startKWinCursorBridge(setKWinCursorPoint);
 	const stopButtons = startEvdevButtonCapture(handlers);
 	return () => {
-		stopPolling?.();
+		stopPointer?.();
 		stopButtons();
 	};
 }
