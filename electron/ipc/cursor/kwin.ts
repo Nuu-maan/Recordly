@@ -4,16 +4,20 @@ import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { CURSOR_SAMPLE_INTERVAL_MS } from "../constants";
+import { CURSOR_SAMPLE_INTERVAL_MS, LINUX_CURSOR_CACHE_TTL_MS } from "../constants";
 
 const SCRIPT_NAME_PREFIX = "recordly-cursor-bridge";
 const TEMP_DIR_PREFIX = "recordly-kwin-";
 const MAX_PAYLOAD_BYTES = 128;
 const DBUS_TIMEOUT_MS = 4000;
 const REQUEST_TIMEOUT_MS = 5000;
-// Posted even when the pointer has not moved, so the script notices a dead
-// server while the user is idle instead of only when they move the mouse.
-const HEARTBEAT_MS = 2000;
+// Posted even when the pointer has not moved. Two reasons: the script notices a
+// dead server while the user is idle rather than only when they next move, and
+// the cached position never ages out. It has to stay comfortably under the
+// cache TTL, because once the cache goes stale the telemetry falls back to
+// Electron's cursor point, which reads (0, 0) on Wayland and writes a hole into
+// the recording for as long as the pointer stays still.
+const HEARTBEAT_MS = Math.floor(LINUX_CURSOR_CACHE_TTL_MS / 2);
 // The compositor is legitimately silent while the pointer is still, so this
 // only downgrades an optimistic "bridge active" log into an honest warning.
 const FIRST_SAMPLE_GRACE_MS = 10_000;
