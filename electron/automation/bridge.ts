@@ -20,7 +20,13 @@ export function createAutomationBridge(options: {
 		}
 	>();
 	const ready = new Set<number>();
-	const waiters = new Set<() => void>();
+	const observed = new Set<number>();
+	const waiters = new Set<{
+		windowId: number;
+		resolve: () => void;
+		reject: (error: Error) => void;
+	}>();
+	let recordingWindowId: number | undefined;
 	const trusted = (event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) => {
 		const window = options.getWindow();
 		return (
@@ -30,12 +36,16 @@ export function createAutomationBridge(options: {
 		);
 	};
 
-	const onReady = (event: Electron.IpcMainEvent) => {
-		if (!trusted(event) || ready.has(event.sender.id)) return;
-		const senderId = event.sender.id;
-		ready.add(senderId);
-		event.sender.once("destroyed", () => {
+	const observeWindow = (window: BrowserWindow) => {
+		const senderId = window.webContents.id;
+		if (observed.has(senderId)) return;
+		observed.add(senderId);
+		const unavailable = () => {
 			ready.delete(senderId);
+			for (const waiter of waiters) {
+				if (waiter.windowId === senderId)
+					waiter.reject(new Error("The recording window closed or reloaded."));
+			}
 			for (const [id, request] of pending) {
 				if (request.window.isDestroyed() || request.window.webContents.id === senderId) {
 					clearTimeout(request.timer);
@@ -43,9 +53,24 @@ export function createAutomationBridge(options: {
 					pending.delete(id);
 				}
 			}
-			options.onClosed();
+			if (recordingWindowId === senderId) options.onClosed();
+		};
+		window.webContents.once("destroyed", () => {
+			observed.delete(senderId);
+			unavailable();
 		});
-		for (const resolve of waiters) resolve();
+		window.webContents.on("render-process-gone", unavailable);
+		window.webContents.on("did-start-loading", unavailable);
+	};
+	const onReady = (event: Electron.IpcMainEvent) => {
+		if (!trusted(event) || ready.has(event.sender.id)) return;
+		const window = options.getWindow();
+		if (!window) return;
+		observeWindow(window);
+		ready.add(event.sender.id);
+		for (const waiter of waiters) {
+			if (waiter.windowId === event.sender.id) waiter.resolve();
+		}
 	};
 	const onResult = (event: Electron.IpcMainEvent, result: RendererAutomationResult) => {
 		if (!trusted(event) || !isRecord(result) || typeof result.id !== "string") return;
@@ -102,26 +127,36 @@ export function createAutomationBridge(options: {
 
 	return {
 		async execute(command: Exclude<AutomationCommand, { method: "get_recording_status" }>) {
-			if (pending.size >= 16)
+			if (pending.size + waiters.size >= 16)
 				throw new AutomationError("BUSY", "Too many pending recording commands.", 429);
 			options.ensureWindow();
 			const window = options.getWindow();
 			if (!window || window.isDestroyed())
 				throw new Error("The recording window is unavailable.");
+			observeWindow(window);
 			if (!ready.has(window.webContents.id)) {
 				await new Promise<void>((resolve, reject) => {
-					const done = () => {
-						clearTimeout(timer);
-						waiters.delete(done);
-						resolve();
+					const waiter = {
+						windowId: window.webContents.id,
+						resolve: () => {
+							clearTimeout(timer);
+							waiters.delete(waiter);
+							resolve();
+						},
+						reject: (error: Error) => {
+							clearTimeout(timer);
+							waiters.delete(waiter);
+							reject(error);
+						},
 					};
 					const timer = setTimeout(() => {
-						waiters.delete(done);
-						reject(new Error("The recording window did not become ready."));
+						waiter.reject(new Error("The recording window did not become ready."));
 					}, 15_000);
-					waiters.add(done);
+					waiters.add(waiter);
 				});
 			}
+			if (window.isDestroyed()) throw new Error("The recording window closed.");
+			if (command.method === "start_recording") recordingWindowId = window.webContents.id;
 			return new Promise<unknown>((resolve, reject) => {
 				const id = randomUUID();
 				const timer = setTimeout(
@@ -137,7 +172,13 @@ export function createAutomationBridge(options: {
 					command.method === "start_recording" ? 180_000 : 20_000,
 				);
 				pending.set(id, { window, method: command.method, resolve, reject, timer });
-				window.webContents.send("automation:command", { id, command });
+				try {
+					window.webContents.send("automation:command", { id, command });
+				} catch (error) {
+					clearTimeout(timer);
+					pending.delete(id);
+					reject(error);
+				}
 			});
 		},
 		close() {
@@ -145,6 +186,7 @@ export function createAutomationBridge(options: {
 			ipcMain.removeListener("automation:result", onResult);
 			ipcMain.removeHandler("automation:update");
 			ipcMain.removeHandler("automation:approve");
+			for (const waiter of waiters) waiter.reject(new Error("Recordly is shutting down."));
 			for (const request of pending.values()) {
 				clearTimeout(request.timer);
 				request.reject(new Error("Recordly is shutting down."));
