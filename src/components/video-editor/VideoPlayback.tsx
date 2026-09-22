@@ -22,6 +22,7 @@ import {
 import {
 	destroyPixiApplication,
 	initializePixiApplicationWithTimeout,
+	orderBackendsByActiveRenderer,
 } from "@/lib/pixiApplicationLifecycle";
 import {
 	DEFAULT_WALLPAPER_PATH,
@@ -521,7 +522,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 				app: Application;
 				backend: PixiPreviewBackend;
 			}> => {
-				const backendOrder: PixiPreviewBackend[] = ["webgl", "webgpu"];
+				const backendOrder: PixiPreviewBackend[] = orderBackendsByActiveRenderer([
+					"webgl",
+					"webgpu",
+				]);
 				const attempts: PixiRendererAttempt[] = [];
 
 				for (const backend of backendOrder) {

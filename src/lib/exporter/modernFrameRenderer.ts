@@ -80,6 +80,7 @@ import {
 import {
 	destroyPixiApplication,
 	initializePixiApplicationWithTimeout,
+	orderBackendsByActiveRenderer,
 } from "@/lib/pixiApplicationLifecycle";
 import { isVideoWallpaperSource } from "@/lib/wallpapers";
 import {
@@ -640,14 +641,15 @@ export class FrameRenderer {
 		};
 
 		const preferredRenderBackend = this.config.preferredRenderBackend;
-		const backendOrder: ExportRenderBackend[] =
+		const backendOrder: ExportRenderBackend[] = orderBackendsByActiveRenderer(
 			preferredRenderBackend === "webgl"
 				? ["webgl", "webgpu"]
 				: preferredRenderBackend === "webgpu"
 					? ["webgpu", "webgl"]
 					: typeof navigator !== "undefined" && "gpu" in navigator
 						? ["webgpu", "webgl"]
-						: ["webgl"];
+						: ["webgl"],
+		);
 		const failures: PixiRendererAttempt[] = [];
 
 		for (const backend of backendOrder) {
