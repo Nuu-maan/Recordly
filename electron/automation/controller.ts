@@ -57,7 +57,9 @@ export class RecordingController {
 				if (oldest) this.recordings.delete(oldest);
 			}
 			void this.execute(command).catch((error: unknown) => {
-				this.update({ recordingId: requestId, phase: "failed", error: String(error) });
+				if (this.recordings.get(requestId)?.phase === "starting") {
+					this.update({ recordingId: requestId, phase: "failed", error: String(error) });
+				}
 			});
 			return { ...recording };
 		}

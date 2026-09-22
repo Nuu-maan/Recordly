@@ -83,7 +83,7 @@ export function parseAutomationCommand(value: unknown): AutomationCommand {
 		start_recording: ["requestId", "sourceId"],
 		stop_recording: ["recordingId"],
 	};
-	if (!Object.hasOwn(allowed, value.method)) {
+	if (!Object.keys(allowed).includes(value.method)) {
 		throw new AutomationError("UNKNOWN_METHOD", "Unknown automation method.");
 	}
 	if (Object.keys(params).some((key) => !allowed[value.method as string].includes(key))) {
