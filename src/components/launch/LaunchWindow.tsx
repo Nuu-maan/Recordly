@@ -61,6 +61,7 @@ function LaunchWindowContent() {
 		paused,
 		finalizing,
 		countdownActive,
+		automationRecording,
 		toggleRecording,
 		pauseRecording,
 		resumeRecording,
@@ -451,6 +452,10 @@ function LaunchWindowContent() {
 					height: "100vh",
 					paddingBottom:
 						hudOverlayResizeAnchor === "center" ? "calc(50vh - 60px)" : "1.25rem",
+					// The overlay window is also the renderer the automation bridge records
+					// through, so it stays mounted and measurable while an agent drives the
+					// capture; hiding it keeps the controls out of the recorded frame.
+					visibility: automationRecording ? "hidden" : undefined,
 				}}
 			>
 				<div
