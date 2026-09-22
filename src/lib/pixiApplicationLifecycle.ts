@@ -3,6 +3,17 @@ import type { Application } from "pixi.js";
 type PixiInitializationState = "initializing" | "initialized" | "failed";
 type PixiInitOptions = Parameters<Application["init"]>[0];
 
+export type PixiRendererBackend = "webgl" | "webgpu";
+
+const RENDERER_TYPE_WEBGL = 1;
+const RENDERER_TYPE_WEBGPU = 2;
+
+// Pixi sizes its batcher layouts once per process and keys them on nothing
+// renderer-specific. A renderer created later with a smaller per-stage texture
+// limit reuses the oversized layout and fails to build any bind group, so every
+// Pixi application in this process has to stay on the first backend that wins.
+let activeBackend: PixiRendererBackend | null = null;
+
 const initializationStates = new WeakMap<Application, PixiInitializationState>();
 const destroyRequests = new WeakSet<Application>();
 const destroyContexts = new WeakMap<Application, string>();
@@ -18,6 +29,26 @@ const STAGE_DESTROY_OPTIONS = {
 	texture: false,
 	textureSource: false,
 } as const;
+
+export function getActivePixiBackend(): PixiRendererBackend | null {
+	return activeBackend;
+}
+
+export function orderBackendsByActiveRenderer<T extends PixiRendererBackend>(
+	backendOrder: readonly T[],
+): T[] {
+	if (!activeBackend) return [...backendOrder];
+	const index = backendOrder.indexOf(activeBackend as T);
+	if (index <= 0) return [...backendOrder];
+	return [backendOrder[index], ...backendOrder.filter((_, position) => position !== index)];
+}
+
+function recordActiveBackend(app: Application): void {
+	if (activeBackend) return;
+	const rendererType = (app as { renderer?: { type?: number } }).renderer?.type;
+	if (rendererType === RENDERER_TYPE_WEBGL) activeBackend = "webgl";
+	else if (rendererType === RENDERER_TYPE_WEBGPU) activeBackend = "webgpu";
+}
 
 function reportCleanupError(app: Application, error: unknown): void {
 	const context = destroyContexts.get(app) ?? "Pixi application";
@@ -68,6 +99,7 @@ export async function initializePixiApplication(
 	try {
 		await app.init(options);
 		initializationStates.set(app, "initialized");
+		recordActiveBackend(app);
 	} catch (error) {
 		initializationStates.set(app, "failed");
 		if (destroyRequests.has(app)) completeDestroy(app);
