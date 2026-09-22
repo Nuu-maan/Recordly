@@ -10,11 +10,18 @@ import {
 } from "./protocol";
 
 async function readCommand(request: IncomingMessage) {
+	if (Number(request.headers["content-length"]) > 8192) {
+		request.resume();
+		throw new AutomationError("BODY_TOO_LARGE", "Command exceeds 8 KiB.", 413);
+	}
 	const chunks: Buffer[] = [];
 	let size = 0;
-	for await (const chunk of request) {
+	for await (const chunk of request.iterator({ destroyOnReturn: false })) {
 		size += chunk.length;
-		if (size > 8192) throw new AutomationError("BODY_TOO_LARGE", "Command exceeds 8 KiB.", 413);
+		if (size > 8192) {
+			request.resume();
+			throw new AutomationError("BODY_TOO_LARGE", "Command exceeds 8 KiB.", 413);
+		}
 		chunks.push(Buffer.from(chunk));
 	}
 	try {

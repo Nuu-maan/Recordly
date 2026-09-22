@@ -46,6 +46,7 @@ it("authenticates local commands, rejects browser requests, and removes its cred
 	});
 	expect(invalidHostStatus).toBe(403);
 	expect((await post({}, "{")).status).toBe(400);
+	expect((await post({}, " ".repeat(9000))).status).toBe(413);
 	expect((await post({}, JSON.stringify({ method: "read_file", params: {} }))).status).toBe(400);
 	expect(dispatch).not.toHaveBeenCalled();
 	expect(await (await post()).json()).toEqual({ result: { phase: "idle" } });
