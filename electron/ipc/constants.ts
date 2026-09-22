@@ -28,4 +28,8 @@ export const COMPANION_AUDIO_LAYOUTS = [
 
 export const CURSOR_TELEMETRY_VERSION = 2;
 export const CURSOR_SAMPLE_INTERVAL_MS = 33;
+// How long a cached Linux pointer position stays usable before the telemetry
+// falls back to Electron's own cursor point, which is meaningless on Wayland.
+// Any Wayland pointer source must refresh the cache faster than this.
+export const LINUX_CURSOR_CACHE_TTL_MS = 1000;
 export const MAX_CURSOR_SAMPLES = 60 * 60 * 30; // 1 hour @ 30Hz

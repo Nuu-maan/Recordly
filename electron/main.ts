@@ -17,6 +17,7 @@ import {
 } from "electron";
 import { RECORDINGS_DIR } from "./appPaths";
 import { showCursor } from "./cursorHider";
+import { stopInteractionCapture } from "./ipc/cursor/interaction";
 import { getGpuSwitches } from "./gpuSwitches";
 import {
 	cleanupAllExportStreams,
@@ -854,6 +855,10 @@ function createSourceSelectorWindowWrapper() {
 // explicitly with Cmd + Q.
 app.on("before-quit", () => {
 	isAppQuitting = true;
+	// Tears down the global interaction hook and, on KDE Wayland, unloads the
+	// cursor bridge script from KWin. A script left registered outlives the app
+	// and keeps broadcasting the pointer to a port nobody owns any more.
+	stopInteractionCapture();
 	killWindowsCaptureProcess();
 	showCursor();
 	cleanupNativeVideoExportSessions();
