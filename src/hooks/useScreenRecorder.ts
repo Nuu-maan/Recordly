@@ -132,6 +132,7 @@ type UseScreenRecorderReturn = {
 	paused: boolean;
 	finalizing: boolean;
 	countdownActive: boolean;
+	automationRecording: boolean;
 	toggleRecording: () => void;
 	pauseRecording: () => void;
 	resumeRecording: () => void;
@@ -435,12 +436,13 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const requestedBrowserMicrophoneProfile = useRef<string | null>(null);
 	const hideEditorOverlayCursorByDefault = useRef(false);
 	const automationDriver = useRef<RecordingAutomationDriver | null>(null);
+	const [automationRecording, setAutomationRecording] = useState(false);
 	const automationRef = useRef<ReturnType<typeof createRecordingAutomation> | null>(null);
 	if (!automationRef.current) {
 		automationRef.current = createRecordingAutomation(() => {
 			if (!automationDriver.current) throw new Error("Recording controls are not ready.");
 			return automationDriver.current;
-		});
+		}, setAutomationRecording);
 	}
 	const automation = automationRef.current;
 
@@ -2567,6 +2569,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		paused,
 		finalizing,
 		countdownActive,
+		automationRecording,
 		toggleRecording,
 		pauseRecording,
 		resumeRecording,

@@ -19,12 +19,21 @@ export interface RecordingAutomationDriver {
 	reply(result: RendererAutomationResult): void;
 }
 
-export function createRecordingAutomation(getDriver: () => RecordingAutomationDriver) {
+export function createRecordingAutomation(
+	getDriver: () => RecordingAutomationDriver,
+	onActiveChange?: (active: boolean) => void,
+) {
 	let recordingId: string | undefined;
 	let phase: RecordingUpdate["phase"] | undefined;
 	let pendingStart: string | undefined;
 	let cancelled = false;
 	const warnings = new Set<string>();
+
+	const setRecordingId = (value: string | undefined) => {
+		if (recordingId === value) return;
+		recordingId = value;
+		onActiveChange?.(value !== undefined);
+	};
 
 	const report = async (update: Omit<RecordingUpdate, "recordingId">) => {
 		if (!recordingId) return;
@@ -41,7 +50,7 @@ export function createRecordingAutomation(getDriver: () => RecordingAutomationDr
 			console.error("Unable to report recording status:", error);
 		} finally {
 			if (["completed", "failed", "cancelled"].includes(update.phase))
-				recordingId = undefined;
+				setRecordingId(undefined);
 		}
 	};
 
@@ -114,7 +123,7 @@ export function createRecordingAutomation(getDriver: () => RecordingAutomationDr
 					await driver.selectSource(source);
 					if (cancelled || getDriver().isBusy())
 						throw new Error("Recording start was cancelled or Recordly became busy.");
-					recordingId = command.params.requestId;
+					setRecordingId(command.params.requestId);
 					warnings.clear();
 					phase = "starting";
 					await getDriver().start();

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRecordingAutomation, type RecordingAutomationDriver } from "./recordingAutomation";
 
-function setup() {
+function setup(onActiveChange?: (active: boolean) => void) {
 	const driver: RecordingAutomationDriver = {
 		isBusy: () => false,
 		listSources: async () => [
@@ -24,7 +24,7 @@ function setup() {
 		report: vi.fn().mockResolvedValue(undefined),
 		reply: vi.fn(),
 	};
-	const automation = createRecordingAutomation(() => driver);
+	const automation = createRecordingAutomation(() => driver, onActiveChange);
 	return { driver, automation };
 }
 
@@ -122,5 +122,27 @@ describe("renderer recording automation", () => {
 		};
 		await automation.handle(start);
 		expect(driver.start).not.toHaveBeenCalled();
+	});
+
+	it("reports when an agent takes over the recorder and when it lets go", async () => {
+		const onActiveChange = vi.fn();
+		const { automation } = setup(onActiveChange);
+
+		await automation.handle(start);
+		expect(onActiveChange).toHaveBeenLastCalledWith(true);
+
+		await automation.report({ phase: "completed", videoPath: "/tmp/test.webm" });
+		expect(onActiveChange).toHaveBeenLastCalledWith(false);
+		expect(onActiveChange).toHaveBeenCalledTimes(2);
+	});
+
+	it("releases the recorder when an agent recording fails", async () => {
+		const onActiveChange = vi.fn();
+		const { automation } = setup(onActiveChange);
+
+		await automation.handle(start);
+		await automation.report({ phase: "failed", error: "capture stopped" });
+
+		expect(onActiveChange).toHaveBeenLastCalledWith(false);
 	});
 });
