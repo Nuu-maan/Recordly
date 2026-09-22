@@ -107,7 +107,13 @@ Agent → MCP stdio process → authenticated HTTP on 127.0.0.1
 
 The MCP package has no Electron imports or native capture dependencies. Recordly's API has no MCP SDK dependency. New recording capabilities can be added to the versioned control contract and exposed as tools without duplicating capture implementations.
 
-Recordly supports one capture at a time. Multiple MCP processes can connect to the same app; concurrent starts are rejected, and stop requires a known automation recording ID. Manual recordings cannot be stopped by these tools. The API binds an ephemeral loopback port, requires a per-launch token, rejects browser origins and unexpected Host headers, and limits command bodies and pending requests. Each automated start requires visible approval; automation is disabled unless explicitly enabled at app startup.
+Recordly supports one capture at a time. Multiple MCP processes can connect to the same app; concurrent starts are rejected, and stop requires a known automation recording ID. Manual recordings cannot be stopped by these tools. The API binds an ephemeral loopback port, requires a per-launch token, rejects browser origins and unexpected Host headers, and limits command bodies and pending requests. Each automated start requires visible approval by default; automation is disabled unless explicitly enabled at app startup.
+
+## Unattended starts
+
+The approval dialog carries an "Allow agent recordings until Recordly quits" checkbox, which skips the prompt for the rest of that app run. To skip it from the first start, launch the app with `--automation-auto-approve` or `RECORDLY_AUTOMATION_AUTO_APPROVE=1`. Both are deliberately opt-in per launch and are never persisted: any agent that can reach the local API can then start recording your screen without asking.
+
+The system screen picker is a separate gate and cannot be waived from inside Recordly. On X11 and on macOS and Windows an agent start needs no picker interaction once a source is chosen. On Wayland the compositor's `xdg-desktop-portal` decides, and Chromium requests a fresh capture session for each start rather than persisting a restore token, so the picker appears on every start even when the portal is configured to allow tokens by default.
 
 The local API is `POST /v1/command` with `Authorization: Bearer <token>` and `Content-Type: application/json`. Its body is `{ "method": "tool_name", "params": { ... } }`. Responses contain `result` or an `error` with `code` and `message`. The connection file's `apiVersion` is checked by the MCP client. Do not expose this API through a public proxy.
 
