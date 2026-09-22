@@ -4,9 +4,16 @@
 	"description": "Standalone MCP server for the Recordly desktop recorder",
 	"type": "module",
 	"private": true,
-	"bin": { "recordly-mcp": "./src/cli.mjs" },
-	"files": ["src", "README.md"],
-	"engines": { "node": ">=22" },
+	"bin": {
+		"recordly-mcp": "./src/cli.mjs"
+	},
+	"files": [
+		"src",
+		"README.md"
+	],
+	"engines": {
+		"node": ">=22"
+	},
 	"scripts": {
 		"start": "node src/cli.mjs",
 		"test": "node --test test/*.test.mjs"
