@@ -60,7 +60,9 @@ export function createAutomationBridge(options: {
 			unavailable();
 		});
 		window.webContents.on("render-process-gone", unavailable);
-		window.webContents.on("did-start-loading", unavailable);
+		window.webContents.on("did-start-loading", () => {
+			if (ready.has(senderId)) unavailable();
+		});
 	};
 	const onReady = (event: Electron.IpcMainEvent) => {
 		if (!trusted(event) || ready.has(event.sender.id)) return;

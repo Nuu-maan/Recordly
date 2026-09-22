@@ -105,4 +105,15 @@ describe("automation IPC bridge", () => {
 		bridge.close();
 		await closed;
 	});
+
+	it("waits for the first load of a newly created recording window", async () => {
+		const { bridge, sender, event } = setup();
+		const loading = bridge.execute({ method: "list_sources", params: {} });
+		sender.emit("did-start-loading");
+		ipcMain.emit("automation:ready", event);
+		await Promise.resolve();
+		const message = sender.send.mock.calls[0][1];
+		ipcMain.emit("automation:result", event, { id: message.id, result: { sources: [] } });
+		expect(await loading).toEqual({ sources: [] });
+	});
 });
