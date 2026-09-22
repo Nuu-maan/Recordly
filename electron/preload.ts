@@ -1,4 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type {
+	AutomationApproval,
+	RecordingUpdate,
+	RendererAutomationCommand,
+	RendererAutomationResult,
+} from "./automation/protocol";
 import type { RecordingSessionData } from "./ipc/types";
 
 type NativeVideoExportWriteResult = { success: boolean; error?: string };
@@ -164,6 +170,24 @@ function settleNativeVideoExportPendingRequests(
 }
 
 contextBridge.exposeInMainWorld("electronAPI", {
+	onAutomationCommand: (callback: (command: RendererAutomationCommand) => void) => {
+		const listener = (_event: Electron.IpcRendererEvent, command: RendererAutomationCommand) =>
+			callback(command);
+		ipcRenderer.on("automation:command", listener);
+		ipcRenderer.send("automation:ready");
+		return () => ipcRenderer.removeListener("automation:command", listener);
+	},
+	onAutomationCancel: (callback: (id: string) => void) => {
+		const listener = (_event: Electron.IpcRendererEvent, id: string) => callback(id);
+		ipcRenderer.on("automation:cancel", listener);
+		return () => ipcRenderer.removeListener("automation:cancel", listener);
+	},
+	replyAutomationCommand: (result: RendererAutomationResult) =>
+		ipcRenderer.send("automation:result", result),
+	requestAutomationApproval: (id: string, details: AutomationApproval): Promise<boolean> =>
+		ipcRenderer.invoke("automation:approve", id, details),
+	reportAutomationRecording: (update: RecordingUpdate): Promise<void> =>
+		ipcRenderer.invoke("automation:update", update),
 	hudOverlaySetIgnoreMouse: (ignore: boolean) => {
 		ipcRenderer.send("hud-overlay-set-ignore-mouse", ignore);
 	},

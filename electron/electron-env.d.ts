@@ -197,6 +197,20 @@ interface RendererNativeExportCapabilities {
 
 interface Window {
 	electronAPI: {
+		onAutomationCommand: (
+			callback: (command: import("./automation/protocol").RendererAutomationCommand) => void,
+		) => () => void;
+		onAutomationCancel: (callback: (id: string) => void) => () => void;
+		replyAutomationCommand: (
+			result: import("./automation/protocol").RendererAutomationResult,
+		) => void;
+		requestAutomationApproval: (
+			id: string,
+			details: import("./automation/protocol").AutomationApproval,
+		) => Promise<boolean>;
+		reportAutomationRecording: (
+			update: import("./automation/protocol").RecordingUpdate,
+		) => Promise<void>;
 		hudOverlaySetIgnoreMouse: (ignore: boolean) => void;
 		hudOverlaySetMenuOpen: (open: boolean) => void;
 		hudOverlaySetSourceSelectionActive: (active: boolean) => void;
