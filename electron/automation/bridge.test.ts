@@ -19,12 +19,15 @@ vi.mock("electron", async () => {
 });
 
 import { ipcMain } from "electron";
-import { createAutomationBridge } from "./bridge";
+import { automationApprovalIsPreauthorized, createAutomationBridge } from "./bridge";
+
+type SenderStub = EventEmitter & { id: number; send: ReturnType<typeof vi.fn> };
 
 const closes: Array<() => void> = [];
 afterEach(() => {
 	closes.splice(0).forEach((close) => close());
 	vi.useRealTimers();
+	vi.unstubAllEnvs();
 	vi.clearAllMocks();
 });
 
@@ -115,5 +118,85 @@ describe("automation IPC bridge", () => {
 		const message = sender.send.mock.calls[0][1];
 		ipcMain.emit("automation:result", event, { id: message.id, result: { sources: [] } });
 		expect(await loading).toEqual({ sources: [] });
+	});
+
+	async function requestApproval(event: unknown, id: string) {
+		return await mocks.handlers.get("automation:approve")?.(event, id, {
+			sourceName: "Screen",
+			microphone: false,
+			systemAudio: false,
+			webcam: false,
+		});
+	}
+
+	function startPending(bridge: ReturnType<typeof createAutomationBridge>, sender: SenderStub) {
+		const started = bridge.execute({
+			method: "start_recording",
+			params: {
+				requestId: `recording-${sender.send.mock.calls.length}`,
+				sourceId: "screen:1:0",
+			},
+		});
+		started.catch(() => {});
+		return sender.send.mock.calls.at(-1)?.[1] as { id: string };
+	}
+
+	it("stops asking for the session once the approval checkbox is used", async () => {
+		const { bridge, sender, event } = setup();
+		ipcMain.emit("automation:ready", event);
+		mocks.dialog.mockResolvedValue({ response: 1, checkboxChecked: true });
+
+		expect(await requestApproval(event, startPending(bridge, sender).id)).toBe(true);
+		expect(mocks.dialog).toHaveBeenCalledTimes(1);
+
+		expect(await requestApproval(event, startPending(bridge, sender).id)).toBe(true);
+		expect(mocks.dialog).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps asking when the approval checkbox is left alone", async () => {
+		const { bridge, sender, event } = setup();
+		ipcMain.emit("automation:ready", event);
+		mocks.dialog.mockResolvedValue({ response: 1, checkboxChecked: false });
+
+		await requestApproval(event, startPending(bridge, sender).id);
+		await requestApproval(event, startPending(bridge, sender).id);
+
+		expect(mocks.dialog).toHaveBeenCalledTimes(2);
+	});
+
+	it("never shows the dialog when the launch flag preauthorized automation", async () => {
+		vi.stubEnv("RECORDLY_AUTOMATION_AUTO_APPROVE", "1");
+		const { bridge, sender, event } = setup();
+		ipcMain.emit("automation:ready", event);
+		mocks.dialog.mockRejectedValue(new Error("the dialog must not be shown"));
+
+		expect(await requestApproval(event, startPending(bridge, sender).id)).toBe(true);
+		expect(mocks.dialog).not.toHaveBeenCalled();
+	});
+
+	it("never suppresses the dialog when approval is declined", async () => {
+		const { bridge, sender, event } = setup();
+		ipcMain.emit("automation:ready", event);
+		mocks.dialog.mockResolvedValue({ response: 0, checkboxChecked: true });
+
+		expect(await requestApproval(event, startPending(bridge, sender).id)).toBe(false);
+		expect(await requestApproval(event, startPending(bridge, sender).id)).toBe(false);
+		expect(mocks.dialog).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("automation approval preauthorization", () => {
+	it("stays off unless it is explicitly requested at launch", () => {
+		expect(automationApprovalIsPreauthorized({}, [])).toBe(false);
+		expect(
+			automationApprovalIsPreauthorized({ RECORDLY_AUTOMATION_AUTO_APPROVE: "0" }, []),
+		).toBe(false);
+	});
+
+	it("honours the environment variable and the launch flag", () => {
+		expect(
+			automationApprovalIsPreauthorized({ RECORDLY_AUTOMATION_AUTO_APPROVE: "1" }, []),
+		).toBe(true);
+		expect(automationApprovalIsPreauthorized({}, ["--automation-auto-approve"])).toBe(true);
 	});
 });

@@ -3,12 +3,23 @@ import { type BrowserWindow, dialog, ipcMain } from "electron";
 import type { AutomationCommand, RecordingUpdate, RendererAutomationResult } from "./protocol";
 import { AutomationError, isRecord } from "./protocol";
 
+export function automationApprovalIsPreauthorized(
+	env: NodeJS.ProcessEnv = process.env,
+	argv: readonly string[] = process.argv,
+): boolean {
+	return (
+		env.RECORDLY_AUTOMATION_AUTO_APPROVE === "1" || argv.includes("--automation-auto-approve")
+	);
+}
+
 export function createAutomationBridge(options: {
 	getWindow: () => BrowserWindow | null;
 	ensureWindow: () => void;
 	onUpdate: (update: RecordingUpdate) => void;
 	onClosed: () => void;
 }) {
+	const preauthorized = automationApprovalIsPreauthorized();
+	let approvalSuppressedForSession = false;
 	const pending = new Map<
 		string,
 		{
@@ -114,17 +125,22 @@ export function createAutomationBridge(options: {
 			)
 		)
 			return false;
+		if (preauthorized || approvalSuppressedForSession) return pending.has(id);
 		const result = await dialog.showMessageBox(request.window, {
 			type: "question",
 			title: "Allow agent recording?",
 			message: `An AI agent wants Recordly to record ${details.sourceName}.`,
-			detail: `Microphone: ${details.microphone ? "on" : "off"}\nSystem audio: ${details.systemAudio ? "on" : "off"}\nWebcam: ${details.webcam ? "on" : "off"}\n\nYou can stop the recording using Recordly's controls.`,
+			detail: `Microphone: ${details.microphone ? "on" : "off"}\nSystem audio: ${details.systemAudio ? "on" : "off"}\nWebcam: ${details.webcam ? "on" : "off"}\n\nThe recording HUD stays hidden so its controls do not appear in the capture. Stop the recording from the agent or the tray.`,
 			buttons: ["Cancel", "Start recording"],
 			defaultId: 0,
 			cancelId: 0,
 			noLink: true,
+			checkboxLabel: "Allow agent recordings until Recordly quits",
+			checkboxChecked: false,
 		});
-		return result.response === 1 && pending.has(id);
+		if (result.response !== 1) return false;
+		if (result.checkboxChecked) approvalSuppressedForSession = true;
+		return pending.has(id);
 	});
 
 	return {
