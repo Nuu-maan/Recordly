@@ -111,3 +111,61 @@ describe("Pixi application lifecycle", () => {
 		}
 	});
 });
+
+describe("Pixi renderer backend locking", () => {
+	async function loadLifecycle() {
+		vi.resetModules();
+		return await import("./pixiApplicationLifecycle");
+	}
+
+	function createRendererApplication(rendererType: number) {
+		return {
+			init: vi.fn(async () => undefined),
+			destroy: vi.fn(),
+			stage: { destroy: vi.fn() },
+			renderer: { type: rendererType, destroy: vi.fn() },
+		} as unknown as Application;
+	}
+
+	it("keeps the requested order until a renderer has initialized", async () => {
+		const lifecycle = await loadLifecycle();
+
+		expect(lifecycle.getActivePixiBackend()).toBeNull();
+		expect(lifecycle.orderBackendsByActiveRenderer(["webgpu", "webgl"])).toEqual([
+			"webgpu",
+			"webgl",
+		]);
+	});
+
+	it("pins later applications to the backend the first renderer used", async () => {
+		const lifecycle = await loadLifecycle();
+
+		await lifecycle.initializePixiApplication(createRendererApplication(1), {});
+
+		expect(lifecycle.getActivePixiBackend()).toBe("webgl");
+		expect(lifecycle.orderBackendsByActiveRenderer(["webgpu", "webgl"])).toEqual([
+			"webgl",
+			"webgpu",
+		]);
+	});
+
+	it("keeps WebGPU first when the first renderer was WebGPU", async () => {
+		const lifecycle = await loadLifecycle();
+
+		await lifecycle.initializePixiApplication(createRendererApplication(2), {});
+
+		expect(lifecycle.getActivePixiBackend()).toBe("webgpu");
+		expect(lifecycle.orderBackendsByActiveRenderer(["webgl", "webgpu"])).toEqual([
+			"webgpu",
+			"webgl",
+		]);
+	});
+
+	it("ignores renderers that report no usable type", async () => {
+		const lifecycle = await loadLifecycle();
+
+		await lifecycle.initializePixiApplication(createRendererApplication(Number.NaN), {});
+
+		expect(lifecycle.getActivePixiBackend()).toBeNull();
+	});
+});
