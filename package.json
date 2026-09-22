@@ -43,7 +43,10 @@
 		"checksums:release": "node scripts/write-release-checksums.mjs",
 		"release:create": "node scripts/create-release.mjs",
 		"test": "vitest --run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"mcp": "node mcp/src/cli.mjs",
+		"test:mcp": "npm --prefix mcp test",
+		"smoke:mcp": "node mcp/test/electron-smoke.mjs"
 	},
 	"dependencies": {
 		"@phosphor-icons/react": "^2.1.10",

@@ -56,6 +56,12 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: npm test
 
+      - name: Test standalone MCP server
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          npm ci --prefix mcp --ignore-scripts
+          npm run test:mcp
+
       # Main currently has known locale-parity debt covered by PR #710. Keep the
       # check visible without blocking unrelated PRs; make it required once that
       # existing translation PR (or an equivalent fix) lands.

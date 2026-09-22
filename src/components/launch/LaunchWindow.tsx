@@ -61,6 +61,7 @@ function LaunchWindowContent() {
 		paused,
 		finalizing,
 		countdownActive,
+		automationRecording,
 		toggleRecording,
 		pauseRecording,
 		resumeRecording,
@@ -108,6 +109,7 @@ function LaunchWindowContent() {
 
 	const {
 		hudOverlayMousePassthroughSupported,
+		hudOverlayResizeAnchor,
 		platform,
 		appVersion,
 		hideHudFromCapture,
@@ -445,8 +447,16 @@ function LaunchWindowContent() {
 			value={{ onMouseEnter: handleHudMouseEnter, onMouseLeave: handleHudMouseLeave }}
 		>
 			<div
-				className="w-full flex justify-center bg-transparent overflow-visible items-end pb-5 pointer-events-none"
-				style={{ height: "100vh" }}
+				className="w-full flex justify-center bg-transparent overflow-visible items-end pointer-events-none"
+				style={{
+					height: "100vh",
+					paddingBottom:
+						hudOverlayResizeAnchor === "center" ? "calc(50vh - 60px)" : "1.25rem",
+					// The overlay window is also the renderer the automation bridge records
+					// through, so it stays mounted and measurable while an agent drives the
+					// capture; hiding it keeps the controls out of the recorded frame.
+					visibility: automationRecording ? "hidden" : undefined,
+				}}
 			>
 				<div
 					ref={hudContentRef}

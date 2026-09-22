@@ -1,20 +1,24 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { app, BrowserWindow, desktopCapturer, ipcMain } from "electron";
+import { reassertHudOverlayMousePassthrough } from "../../windows";
 import { ALLOW_RECORDLY_WINDOW_CAPTURE } from "../constants";
+import {
+	getNativeMacWindowSources,
+	resolveLinuxWindowBounds,
+	resolveMacWindowBounds,
+	resolveWindowsWindowBounds,
+	stopWindowBoundsCapture,
+} from "../cursor/bounds";
+import { getDisplayBoundsForSource, getDisplayWorkAreaForSource } from "../recording/ffmpeg";
 import { selectedSource, setSelectedSource } from "../state";
 import type { SelectedSource } from "../types";
 import { getScreen, parseWindowId } from "../utils";
-import { getDisplayBoundsForSource, getDisplayWorkAreaForSource } from "../recording/ffmpeg";
-import { getScreenSourceIdForDisplay } from "./sourceMapping";
 import {
-	getNativeMacWindowSources,
-	resolveMacWindowBounds,
-	resolveWindowsWindowBounds,
-	resolveLinuxWindowBounds,
-	stopWindowBoundsCapture,
-} from "../cursor/bounds";
-import { reassertHudOverlayMousePassthrough } from "../../windows";
+	getScreenSourceIdForDisplay,
+	isLikelyLinuxWaylandSession,
+	LINUX_PORTAL_SCREEN_SOURCE_ID,
+} from "./sourceMapping";
 
 const execFileAsync = promisify(execFile);
 const SOURCE_LIST_CACHE_TTL_MS = 1200;
@@ -46,6 +50,22 @@ export function registerSourceHandlers({
 	getSourceSelectorWindow: () => BrowserWindow | null;
 }) {
 	ipcMain.handle("get-sources", async (_, opts) => {
+		if (
+			opts?.allowPortalPrompt === false &&
+			process.platform === "linux" &&
+			isLikelyLinuxWaylandSession(process.env)
+		) {
+			return [
+				{
+					id: LINUX_PORTAL_SCREEN_SOURCE_ID,
+					name: "Choose screen or window in system picker",
+					display_id: "",
+					thumbnail: null,
+					appIcon: null,
+					sourceType: "screen",
+				},
+			];
+		}
 		const cacheKey = JSON.stringify({
 			types: opts?.types,
 			thumbnailSize: opts?.thumbnailSize,
