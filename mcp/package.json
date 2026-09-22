@@ -1,0 +1,21 @@
+{
+	"name": "@recordly/mcp",
+	"version": "0.1.0",
+	"description": "Standalone MCP server for the Recordly desktop recorder",
+	"type": "module",
+	"private": true,
+	"bin": { "recordly-mcp": "./src/cli.mjs" },
+	"files": ["src", "README.md"],
+	"engines": { "node": ">=22" },
+	"scripts": {
+		"start": "node src/cli.mjs",
+		"test": "node --test test/*.test.mjs"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/server": "^2.0.0",
+		"zod": "^4.0.0"
+	},
+	"devDependencies": {
+		"@modelcontextprotocol/client": "^2.0.0"
+	}
+}
