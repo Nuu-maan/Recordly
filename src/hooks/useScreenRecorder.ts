@@ -2504,13 +2504,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				types: ["screen", "window"],
 				thumbnailSize: { width: 0, height: 0 },
 				fetchWindowIcons: false,
+				allowPortalPrompt: false,
 			});
-			if (
-				(await window.electronAPI.getPlatform()) === "linux" &&
-				!sources.some((source) => source.id === LINUX_PORTAL_SOURCE.id)
-			) {
-				sources.push(LINUX_PORTAL_SOURCE);
-			}
 			return sources;
 		},
 		settings: () => ({

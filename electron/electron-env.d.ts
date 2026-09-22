@@ -229,7 +229,9 @@ interface Window {
 			enabled: boolean,
 		) => Promise<{ success: boolean; enabled: boolean }>;
 		getAssetBasePath: () => Promise<string | null>;
-		getSources: (opts: Electron.SourcesOptions) => Promise<ProcessedDesktopSource[]>;
+		getSources: (
+			opts: Electron.SourcesOptions & { allowPortalPrompt?: boolean },
+		) => Promise<ProcessedDesktopSource[]>;
 		switchToEditor: () => Promise<void>;
 		openSourceSelector: () => Promise<void>;
 		selectSource: (source: ProcessedDesktopSource) => Promise<ProcessedDesktopSource>;

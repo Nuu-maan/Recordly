@@ -503,7 +503,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	getVideoAudioFallbackPaths: (videoPath: string) => {
 		return ipcRenderer.invoke("get-video-audio-fallback-paths", videoPath);
 	},
-	getSources: async (opts: Electron.SourcesOptions) => {
+	getSources: async (opts: Electron.SourcesOptions & { allowPortalPrompt?: boolean }) => {
 		return await ipcRenderer.invoke("get-sources", opts);
 	},
 	switchToEditor: () => {
