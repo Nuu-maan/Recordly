@@ -24,6 +24,7 @@ export function createRecordingAutomation(getDriver: () => RecordingAutomationDr
 	let phase: RecordingUpdate["phase"] | undefined;
 	let pendingStart: string | undefined;
 	let cancelled = false;
+	const warnings = new Set<string>();
 
 	const report = async (update: Omit<RecordingUpdate, "recordingId">) => {
 		if (!recordingId) return;
@@ -31,7 +32,11 @@ export function createRecordingAutomation(getDriver: () => RecordingAutomationDr
 		if (phase === "finalizing" && update.phase === "recording") return;
 		phase = update.phase;
 		try {
-			await getDriver().report({ ...update, recordingId });
+			await getDriver().report({
+				...update,
+				recordingId,
+				...(warnings.size ? { warnings: [...warnings] } : {}),
+			});
 		} catch (error) {
 			console.error("Unable to report recording status:", error);
 		} finally {
@@ -42,6 +47,9 @@ export function createRecordingAutomation(getDriver: () => RecordingAutomationDr
 
 	return {
 		report,
+		warn(message: string) {
+			if (recordingId) warnings.add(message);
+		},
 		isActive: () => recordingId !== undefined,
 		isPending: () => pendingStart !== undefined,
 		cancel(id: string) {
@@ -107,6 +115,7 @@ export function createRecordingAutomation(getDriver: () => RecordingAutomationDr
 					if (cancelled || getDriver().isBusy())
 						throw new Error("Recording start was cancelled or Recordly became busy.");
 					recordingId = command.params.requestId;
+					warnings.clear();
 					phase = "starting";
 					await getDriver().start();
 					if (phase === "starting")

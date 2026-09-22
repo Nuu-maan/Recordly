@@ -69,7 +69,14 @@ describe("renderer recording automation", () => {
 			recordingId: "recording-1",
 			phase: "finalizing",
 		});
+		automation.warn("Webcam capture was unavailable.");
 		await automation.report({ phase: "completed", videoPath: "/tmp/test.webm" });
+		expect(driver.report).toHaveBeenLastCalledWith({
+			recordingId: "recording-1",
+			phase: "completed",
+			videoPath: "/tmp/test.webm",
+			warnings: ["Webcam capture was unavailable."],
+		});
 		expect(automation.isActive()).toBe(false);
 	});
 

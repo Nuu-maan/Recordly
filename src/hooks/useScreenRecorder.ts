@@ -932,6 +932,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					const errorMessage =
 						result.error || "Failed to save the fallback microphone audio track";
 					console.warn("Failed to store microphone sidecar:", errorMessage);
+					automation.warn("The fallback microphone track could not be saved.");
 					toast.error(
 						`${errorMessage}. Recording was saved without the fallback microphone track.`,
 						{ id: MICROPHONE_SIDECAR_ERROR_TOAST_ID, duration: 10000 },
@@ -939,6 +940,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				}
 			} catch (error) {
 				console.warn("Failed to store microphone sidecar:", error);
+				automation.warn("The fallback microphone track could not be saved.");
 				toast.error(
 					`${getErrorMessage(error)}. Recording was saved without the fallback microphone track.`,
 					{ id: MICROPHONE_SIDECAR_ERROR_TOAST_ID, duration: 10000 },
@@ -952,7 +954,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				resetMicFallbackTimingDiagnostics();
 			}
 		},
-		[resetMicFallbackTimingDiagnostics],
+		[automation, resetMicFallbackTimingDiagnostics],
 	);
 
 	const stopWebcamRecorder = useCallback(async () => {
@@ -1069,6 +1071,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				}
 			};
 			recorder.onerror = () => {
+				automation.warn("Webcam recording failed.");
 				webcamStopResolver.current?.(null);
 				webcamStopResolver.current = null;
 			};
@@ -1079,6 +1082,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 				try {
 					if (webcamChunks.current.length === 0) {
+						automation.warn("The webcam produced no video data.");
 						webcamStopResolver.current?.(null);
 						return;
 					}
@@ -1101,8 +1105,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 						webcamFileName,
 					);
 					webcamStopResolver.current?.(result.success ? (result.path ?? null) : null);
+					if (!result.success || !result.path)
+						automation.warn("The webcam recording could not be saved.");
 				} catch (error) {
 					console.error("Error saving webcam recording:", error);
+					automation.warn("The webcam recording could not be saved.");
 					webcamStopResolver.current?.(null);
 				} finally {
 					webcamStopResolver.current = null;
@@ -1119,6 +1126,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				"Failed to start webcam recording; continuing without webcam layer:",
 				error,
 			);
+			automation.warn(
+				"Webcam capture was unavailable; recording continued without a webcam layer.",
+			);
 			resolvedWebcamPath.current = null;
 			pendingWebcamPathPromise.current = Promise.resolve(null);
 			webcamStopPromise.current = Promise.resolve(null);
@@ -1130,7 +1140,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				webcamStream.current = null;
 			}
 		}
-	}, [getRecordingDurationMs, selectWebcamMimeType, webcamDeviceId, webcamEnabled]);
+	}, [automation, getRecordingDurationMs, selectWebcamMimeType, webcamDeviceId, webcamEnabled]);
 
 	/** Start the prepared webcam MediaRecorder. Call after main recording begins. */
 	const beginWebcamCapture = useCallback(() => {
@@ -1911,6 +1921,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 							micFallbackRecorderMetadata.current = null;
 							resetMicFallbackTimingDiagnostics();
 							console.warn("Browser microphone fallback failed:", micError);
+							automation.warn(
+								"Microphone capture was unavailable; recording continued without microphone audio.",
+							);
 							const permissionDenied =
 								micError instanceof DOMException &&
 								(micError.name === "NotAllowedError" ||
@@ -2044,6 +2057,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 							"System audio capture failed, falling back to video-only:",
 							audioError,
 						);
+						automation.warn(
+							"System audio was unavailable; recording continued without system audio.",
+						);
 						alert(
 							"System audio is not available for this source. Recording will continue without system audio.",
 						);
@@ -2083,6 +2099,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 						);
 					} catch (audioError) {
 						console.warn("Failed to get microphone access:", audioError);
+						automation.warn(
+							"Microphone capture was unavailable; recording continued without microphone audio.",
+						);
 						alert(
 							"Microphone access was denied. Recording will continue without microphone audio.",
 						);
@@ -2091,6 +2110,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				}
 
 				const systemAudioTrack = screenMediaStream.getAudioTracks()[0];
+				if (systemAudioEnabled && !systemAudioTrack)
+					automation.warn("The selected source supplied no system audio track.");
 				const micAudioTrack = microphoneStream.current?.getAudioTracks()[0];
 
 				if (systemAudioTrack && micAudioTrack) {

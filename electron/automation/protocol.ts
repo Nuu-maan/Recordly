@@ -24,10 +24,13 @@ export interface AutomationRecording {
 	videoPath?: string;
 	webcamPath?: string | null;
 	error?: string;
+	warnings?: string[];
 }
 
 export type RecordingUpdate = Pick<AutomationRecording, "recordingId" | "phase"> &
-	Partial<Pick<AutomationRecording, "paused" | "videoPath" | "webcamPath" | "error">>;
+	Partial<
+		Pick<AutomationRecording, "paused" | "videoPath" | "webcamPath" | "error" | "warnings">
+	>;
 
 export interface AutomationSource {
 	id: string;
