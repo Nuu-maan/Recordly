@@ -1,9 +1,9 @@
 import {
-	AutomationError,
 	type AutomationCommand,
+	AutomationError,
 	type AutomationRecording,
-	type RecordingUpdate,
 	isTerminalPhase,
+	type RecordingUpdate,
 } from "./protocol";
 
 export class RecordingController {
@@ -27,12 +27,20 @@ export class RecordingController {
 			const previous = this.recordings.get(requestId);
 			if (previous) {
 				if (previous.sourceId !== sourceId) {
-					throw new AutomationError("ID_CONFLICT", "This requestId belongs to another source.", 409);
+					throw new AutomationError(
+						"ID_CONFLICT",
+						"This requestId belongs to another source.",
+						409,
+					);
 				}
 				return { ...previous };
 			}
 			if ([...this.recordings.values()].some((item) => !isTerminalPhase(item.phase))) {
-				throw new AutomationError("BUSY", "A recording is already starting, active, or saving.", 409);
+				throw new AutomationError(
+					"BUSY",
+					"A recording is already starting, active, or saving.",
+					409,
+				);
 			}
 			const timestamp = new Date().toISOString();
 			const recording: AutomationRecording = {
@@ -58,11 +66,19 @@ export class RecordingController {
 			return { ...recording };
 		}
 		if (recording.phase === "starting") {
-			throw new AutomationError("NOT_READY", "Recording is still awaiting approval or starting.", 409);
+			throw new AutomationError(
+				"NOT_READY",
+				"Recording is still awaiting approval or starting.",
+				409,
+			);
 		}
 		this.update({ recordingId: recording.recordingId, phase: "finalizing" });
 		void this.execute(command).catch((error: unknown) => {
-			this.update({ recordingId: recording.recordingId, phase: "failed", error: String(error) });
+			this.update({
+				recordingId: recording.recordingId,
+				phase: "failed",
+				error: String(error),
+			});
 		});
 		return { ...this.get(recording.recordingId) };
 	}

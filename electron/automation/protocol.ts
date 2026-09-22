@@ -108,9 +108,12 @@ export function parseAutomationCommand(value: unknown): AutomationCommand {
 			if (
 				typeof params.sourceId !== "string" ||
 				params.sourceId.length > 256 ||
-				!params.sourceId.startsWith("screen:") && !params.sourceId.startsWith("window:")
+				(!params.sourceId.startsWith("screen:") && !params.sourceId.startsWith("window:"))
 			) {
-				throw new AutomationError("INVALID_PARAMS", "sourceId must come from list_sources.");
+				throw new AutomationError(
+					"INVALID_PARAMS",
+					"sourceId must come from list_sources.",
+				);
 			}
 			return {
 				method: value.method,
