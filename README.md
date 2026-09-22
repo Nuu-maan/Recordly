@@ -298,6 +298,10 @@ xattr -rd com.apple.quarantine /Applications/Recordly.app
 
 # Usage
 
+## AI agent recording
+
+Recordly can expose an opt-in local recording API for a separately launched MCP server. Agents can list capture sources, request recording, check status, and stop with a saved video path after finalization. See the [MCP setup and client configuration](./mcp/README.md).
+
 ## Record
 
 1. Launch Recordly.
