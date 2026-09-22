@@ -2,6 +2,7 @@ import { fixWebmDuration } from "@fix-webm-duration/fix";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getEffectiveRecordingDurationMs } from "@/lib/mediaTiming";
+import { createRecordingAutomation, type RecordingAutomationDriver } from "./recordingAutomation";
 import {
 	getVideoExtensionForMimeType,
 	isWebmMimeType,
@@ -433,11 +434,24 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	);
 	const requestedBrowserMicrophoneProfile = useRef<string | null>(null);
 	const hideEditorOverlayCursorByDefault = useRef(false);
+	const automationDriver = useRef<RecordingAutomationDriver | null>(null);
+	const automationRef = useRef<ReturnType<typeof createRecordingAutomation> | null>(null);
+	if (!automationRef.current) {
+		automationRef.current = createRecordingAutomation(() => {
+			if (!automationDriver.current) throw new Error("Recording controls are not ready.");
+			return automationDriver.current;
+		});
+	}
+	const automation = automationRef.current;
 
-	const notifyRecordingFinalizationFailure = useCallback(async (message: string) => {
-		setFinalizing(false);
-		toast.error(message, { duration: 10000 });
-	}, []);
+	const notifyRecordingFinalizationFailure = useCallback(
+		async (message: string) => {
+			setFinalizing(false);
+			await automation.report({ phase: "failed", error: message });
+			toast.error(message, { duration: 10000 });
+		},
+		[automation],
+	);
 
 	const logNativeCaptureDiagnostics = useCallback(async (context: string) => {
 		if (typeof window.electronAPI?.getLastNativeCaptureDiagnostics !== "function") {
@@ -987,6 +1001,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const webcamPath = await stopWebcamRecorder();
 			await storeMicrophoneSidecar(resolvedMicFallbackBlobPromise, result.path, startDelayMs);
 			await finalizeRecordingSession(result.path, webcamPath);
+			await automation.report({ phase: "completed", videoPath: result.path, webcamPath });
 
 			if (typeof window.electronAPI?.hudOverlayClose === "function") {
 				window.electronAPI.hudOverlayClose();
@@ -995,6 +1010,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			return result.path;
 		},
 		[
+			automation,
 			finalizeRecordingSession,
 			stopMicFallbackRecorder,
 			stopWebcamRecorder,
@@ -1266,6 +1282,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const stopRecording = useRef(() => {
 		recordingStartGeneration.current += 1;
 		setPaused(false);
+		void automation.report({ phase: "finalizing" });
 		if (nativeScreenRecording.current && nativeWarmStartActive.current) {
 			setRecording(false);
 			void (async () => {
@@ -1436,12 +1453,34 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 							timeOffsetMs: webcamTimeOffsetMs.current,
 							hideOverlayCursorByDefault: hideEditorOverlayCursorByDefault.current,
 						});
+						const failedTask = [webcamResult, microphoneResult, muxResult].find(
+							(result) => result.status === "rejected",
+						);
+						const muxFailure =
+							muxResult.status === "fulfilled" &&
+							muxResult.value &&
+							!muxResult.value.success;
+						await automation.report({
+							phase: failedTask || muxFailure ? "failed" : "completed",
+							videoPath: finalPath,
+							webcamPath,
+							...(failedTask || muxFailure
+								? {
+										error: "Some recording tracks could not be finalized. Open the saved video in Recordly to recover available media.",
+									}
+								: {}),
+						});
 
 						console.log(
 							`[PERF:RENDERER] Background Stop Sequence: COMPLETED in ${(performance.now() - stopStart).toFixed(2)}ms`,
 						);
 					} catch (bgError) {
 						console.error("Error in background finalization:", bgError);
+						await automation.report({
+							phase: "failed",
+							videoPath: finalPath,
+							error: getErrorMessage(bgError),
+						});
 					} finally {
 						// After all background tasks are done (webcam, mic sidecars, muxing),
 						// we can safely close the HUD window to release hardware and resources.
@@ -1900,6 +1939,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 							stateError,
 						);
 					}
+					await automation.report({ phase: "recording", paused: false });
 
 					return;
 				}
@@ -2147,6 +2187,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					? AUDIO_BITRATE_SYSTEM
 					: AUDIO_BITRATE_VOICE
 				: undefined;
+			if (startWasCancelled()) {
+				cleanupCapturedMedia();
+				await stopWebcamRecorder();
+				return;
+			}
 			const recorder = new MediaRecorder(
 				stream.current,
 				createBrowserRecordingOptions({
@@ -2164,6 +2209,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				cleanupCapturedMedia();
 				if (chunks.current.length === 0) {
 					setFinalizing(false);
+					await automation.report({
+						phase: "failed",
+						error: "Recording produced no video data.",
+					});
 					return;
 				}
 
@@ -2202,11 +2251,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 						// 2. Background webcam processing
 						void (async () => {
-							const webcamPath = pendingWebcamPathPromise.current
-								? await pendingWebcamPathPromise.current
-								: resolvedWebcamPath.current;
-
 							try {
+								const webcamPath = pendingWebcamPathPromise.current
+									? await pendingWebcamPathPromise.current
+									: resolvedWebcamPath.current;
 								if (webcamPath) {
 									await window.electronAPI.setCurrentRecordingSession({
 										videoPath: finalVideoPath,
@@ -2216,6 +2264,17 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 											hideEditorOverlayCursorByDefault.current,
 									});
 								}
+								await automation.report({
+									phase: "completed",
+									videoPath: finalVideoPath,
+									webcamPath,
+								});
+							} catch (error) {
+								await automation.report({
+									phase: "failed",
+									videoPath: finalVideoPath,
+									error: getErrorMessage(error),
+								});
 							} finally {
 								// After all background tasks are done (webcam),
 								// we can safely close the HUD window to release hardware and resources.
@@ -2240,6 +2299,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			};
 			recorder.onerror = () => {
 				setRecording(false);
+				void automation.report({
+					phase: "failed",
+					error: "The browser recording backend failed.",
+				});
 			};
 			const mainStartedAt = Date.now();
 			beginWebcamCapture();
@@ -2253,13 +2316,17 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			} catch (stateError) {
 				console.warn("Failed to notify main process that recording started:", stateError);
 			}
+			await automation.report({ phase: "recording", paused: false });
 		} catch (error) {
 			console.error("Failed to start recording:", error);
-			alert(
-				error instanceof Error
-					? `Failed to start recording: ${error.message}`
-					: "Failed to start recording",
-			);
+			if (automation.isActive()) {
+				await automation.report({ phase: "failed", error: getErrorMessage(error) });
+			} else
+				alert(
+					error instanceof Error
+						? `Failed to start recording: ${error.message}`
+						: "Failed to start recording",
+				);
 			setRecording(false);
 			if (nativeScreenRecording.current) {
 				await discardActiveNativeCapture();
@@ -2374,6 +2441,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const cancelRecording = useCallback(() => {
 		recordingStartGeneration.current += 1;
 		if (!recording) return;
+		void automation.report({ phase: "cancelled" });
 		setPaused(false);
 		markRecordingResumed(Date.now());
 
@@ -2408,10 +2476,16 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			setRecording(false);
 			window.electronAPI?.setRecordingState(false);
 		}
-	}, [cleanupCapturedMedia, discardActiveNativeCapture, markRecordingResumed, recording]);
+	}, [
+		automation,
+		cleanupCapturedMedia,
+		discardActiveNativeCapture,
+		markRecordingResumed,
+		recording,
+	]);
 
 	const toggleRecording = async () => {
-		if (starting || countdownActive || finalizing) {
+		if (starting || countdownActive || finalizing || automation.isPending()) {
 			return;
 		}
 
@@ -2422,6 +2496,55 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 		startRecording();
 	};
+
+	automationDriver.current = {
+		isBusy: () => recording || startInFlight.current || finalizing || countdownActive,
+		listSources: async () => {
+			const sources = await window.electronAPI.getSources({
+				types: ["screen", "window"],
+				thumbnailSize: { width: 0, height: 0 },
+				fetchWindowIcons: false,
+			});
+			if (
+				(await window.electronAPI.getPlatform()) === "linux" &&
+				!sources.some((source) => source.id === LINUX_PORTAL_SOURCE.id)
+			) {
+				sources.push(LINUX_PORTAL_SOURCE);
+			}
+			return sources;
+		},
+		settings: () => ({
+			microphone: microphoneEnabled,
+			systemAudio: systemAudioEnabled,
+			webcam: webcamEnabled,
+		}),
+		approve: (id, details) => window.electronAPI.requestAutomationApproval(id, details),
+		selectSource: (source) => window.electronAPI.selectSource(source),
+		start: startRecording,
+		stop: () => stopRecording.current(),
+		cancelStart: () => {
+			recordingStartGeneration.current += 1;
+			void window.electronAPI.cancelCountdown();
+			if (nativeScreenRecording.current) void discardActiveNativeCapture();
+		},
+		report: (update) => window.electronAPI.reportAutomationRecording(update),
+		reply: (result) => window.electronAPI.replyAutomationCommand(result),
+	};
+
+	useEffect(() => {
+		const removeCancel = window.electronAPI.onAutomationCancel?.((id) => automation.cancel(id));
+		const removeCommand = window.electronAPI.onAutomationCommand?.((command) => {
+			void automation.handle(command);
+		});
+		return () => {
+			removeCommand?.();
+			removeCancel?.();
+		};
+	}, [automation]);
+
+	useEffect(() => {
+		if (recording && !starting) void automation.report({ phase: "recording", paused });
+	}, [automation, recording, paused, starting]);
 
 	return {
 		recording,
